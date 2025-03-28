@@ -88,6 +88,7 @@ public class Main
 			// Read static route table
 			if (routeTableFile != null)
 			{ ((Router)dev).loadRouteTable(routeTableFile); }
+			else { ((Router)dev).startRIPTable(routeTableFile); } // BTD - else statement here for triggering RIP
 			
 			// Read static ACP cache
 			if (arpCacheFile != null)
@@ -96,7 +97,14 @@ public class Main
 
 		// Read messages from the server until the server closes the connection
 		System.out.println("<-- Ready to process packets -->");
-		while (vnsComm.readFromServer());
+
+		// BTD - Including handling for if periodic RIP message needs sent
+		if (routeTableFile == null && dev instanceof Router){
+			while (vnsComm.readFromServer()){
+				((Router)dev).checkLastRIPTime();
+			}
+		}
+		else {while (vnsComm.readFromServer());}
 		
 		// Shutdown the router
 		dev.destroy();
