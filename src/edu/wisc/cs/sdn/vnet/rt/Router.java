@@ -20,6 +20,11 @@ public class Router extends Device
 	
 	/** ARP cache for the router */
 	private ArpCache arpCache;
+
+	/** BTD - Default value for RIP is false */
+	private boolean RIPActive = false;
+	private RIPv2 RIPtable;
+	private long LastRIPCheckTime;
 	
 	/**
 	 * Creates a router for a specific host.
@@ -54,6 +59,37 @@ public class Router extends Device
 		System.out.println("Loaded static route table");
 		System.out.println("-------------------------------------------------");
 		System.out.print(this.routeTable.toString());
+		System.out.println("-------------------------------------------------");
+	}
+
+	/**
+	 * BTD - Generate a new RIP routing table.
+	 */
+	public void startRIPTable()
+	{
+		
+		// Initialize key values in Router
+		this.RIPActive = true;
+		this.RIPtable = new RIPv2();
+
+		// Load in attached interfaces and add subnets reachable directly by router's interfaces
+		for (Iface iface : this.interfaces.values()) {
+			// Reachable subnet calculation
+			int targetSubnet = iface.getIpAddress() & iface.getSubnetMask();
+			RIPv2Entry new_entry = new RIPv2Entry(targetSubnet, iface.getSubnetMask(), 0);
+			this.RIPtable.addEntry(new_entry);
+		}
+
+		// Send Request for RIP 
+		requestRIP();
+
+		// Set RIP timer
+		this.LastRIPCheckTime = System.currentTimeMillis();
+		
+		// Update user
+		System.out.println("Started RIP table.");
+		System.out.println("-------------------------------------------------");
+		System.out.print(this.RIPtable.toString());
 		System.out.println("-------------------------------------------------");
 	}
 	
@@ -113,6 +149,11 @@ public class Router extends Device
 			return;
 		}
 
+		// BTD - Check if UDP message containing RIP
+		 if (checkForRIP(ipPacket)) {
+			return; // Perform no further processing if this is a UDP packet for RIP
+		 }
+
 		// Recalculate checksum of the IP packet
 		ipPacket.resetChecksum();
 		ipPacket.serialize();
@@ -125,8 +166,10 @@ public class Router extends Device
 			}
 		}
 
+		// BTD - need alternative handling for when RIP is active to replace using routeTable.lookup, can borrow code though
+
 		// Check if destination IP is in routing table
-		RouteEntry bestMatch = this.routeTable.lookup(ipPacket.getDestinationAddress());
+		RouteEntry bestMatch = this.routeTable.lookup(ipPacket.getDestinationAddress()); // BTD - only instance of use of routeTable
 		if (bestMatch == null) {
 			System.out.println("No matching route in routing table. Dropping packet.");
 			return;
@@ -186,4 +229,80 @@ public class Router extends Device
 		}
 		
 	}
+
+	/*********************************** Handling for RIP ***********************************/
+
+	/**
+	 * BTD - UDP Packet checking and handling
+	 */
+	public boolean checkForRIP(IPv4 ipPacket)
+	{
+		// Is this a UDP packet
+		if (false){
+			return false;
+		}
+
+		// Is this a UDP packet hitting expected port 520
+		if (false){
+			return false;
+		}
+		
+		// If this is a response, update existing data (also handle if it is a request)
+		reviewRIPdata();
+
+		return true;
+	}
+
+	/**
+	 * BTD - Check if Another RIP Request needs sent
+	 */
+	public void checkLastRIPTime()
+	{	
+		// Check time
+		// Check for expired entries
+		// Send responseRIP if needed
+
+	}
+
+	/**
+	 * BTD - Check if new data provided from RIP message
+	 * @param boolean document whether or not response is required
+	 */
+	public void reviewRIPdata(boolean needsResponse)
+	{
+
+		// OR statement handling, if table was update or a request was sent then send response
+	}
+
+	//------------------------------------- RIP -> UDP packet -> IP packet for order of encapsulation
+
+	/**
+	 * BTD - Send a RIP request
+	 * @param boolean Is this a request
+	 */
+	public void sendRIP(boolean isRequest)
+	{
+		// Check for expired entries
+		// Will handle broadcast rip, and unsolicited
+		// Should be sent out all interfaces
+	}
+
+	/**
+	 * Generate RIP UDP
+	 * @param boolean Is this a reponse to a request
+	 */
+	public UDP generateUDPrip(boolean is_response)
+	{
+		// update necessary data in UDP
+	}
+
+	/**
+	 * Generate IPv4 for RIP
+	 * @param UDP UDP packet to be encapsulated
+	 */
+	public IPv4 generateIPv4rip(UDP udp_packet)
+	{
+
+	}
+
 }
