@@ -383,31 +383,127 @@ public class Router extends Device
 
 	/**
 	 * BTD - Send a RIP request
-	 * @param boolean Is this a request
+	 * @param byte command type of RIP message
+	 * @param Iface interface to send the packet on (if this is broadcast, should pass null)
 	 */
-	public void sendRIP(boolean isRequest)
+	public void sendRIP(byte command_type, IPv4 ipPacket)
 	{
-		// Check for expired entries
-		// Will handle broadcast rip, and unsolicited
-		// Should be sent out all interfaces
-	}
+		// Check if RIP is active
+		if (!RIPActive) {
+			System.out.println("RIP is not active. Cannot send RIP request.");
+			return;
+		}
 
-	/**
-	 * Generate RIP UDP
-	 * @param boolean Is this a reponse to a request
-	 */
-	public UDP generateUDPrip(boolean is_response)
-	{
-		// update necessary data in UDP
+		// Check if the command type is valid
+		if  (command_type != 1 && command_type != 2) {
+			System.out.println("Invalid command type. Cannot send RIP request.");
+			return;
+		}
+
+		// Set the command type
+		this.RIPtable.setCommand(command_type, iface);
+
+		// Check for expired entries
+		checkExpiredEntries();
+
+		// Check if interface is in list of interfaces
+		if (ipPacket.getDestinationAddress() == null) {
+			// Rotate through interfaces on router
+			for (Iface iface : this.interfaces.values()) {
+				// Send the packet
+				sendIPv4rip(iface);
+			}
+		}
+		else (ipPacket.getDestinationAddress() != null){
+			if(!this.interfaces.containsKey(ipPacket.getDestinationAddress())) {
+				System.out.println("Invalid interface. Cannot send RIP request.");
+			} 
+			else if (this.RIPtable.getCommand() == 2) {
+					// Send the packet
+					sendIPv4rip(ipPacket.getDestinationAddress());
+			} else {
+				System.out.println("Invalid command type. Must be type 2 if sending out targetted interface.");
+			}
+		} 
+
+		// Reset the command type
+		this.RIPtable.setCommand((byte) 0);
+		return;
+
 	}
 
 	/**
 	 * Generate IPv4 for RIP
-	 * @param UDP UDP packet to be encapsulated
+	 * @param Iface interface to send the packet on (if this is broadcast, should pass null)
 	 */
-	public IPv4 generateIPv4rip(UDP udp_packet)
+	public IPv4 sendIPv4rip(Iface iface)
 	{
+		// Make sure a valid interface was sent
+		if (iface == null) {
+			System.out.println("Invalid interface in sendIPv4rip. Cannot send RIP request.");
+			return null;
+		}
+
+		// Create a new IPv4 packet
+		IPv4 ipv4Packet = new IPv4();
+
+		// Set the source and destination IP addresses
+		ipv4Packet.setSourceAddress(iface.getIpAddress());
+		ipv4Packet.setDestinationAddress(iface.getSubnetMask());
+
+		// Set the protocol to UDP
+		ipv4Packet.setProtocol(IPv4.PROTOCOL_UDP);
+
+		// Set the TTL to 255
+		ipv4Packet.setTtl((byte) 255);
+
+		// Set the payload to the UDP packet
+		ipv4Packet.setPayload(generateUDPrip());
+
+		// Set the checksum
+		ipv4Packet.resetChecksum();
+
+		// Serialize
+
+		// Send the packet
+		System.out.println("Attempting to send RIP message.");
+		if (sendPacket(etherPacket, iface))
+		{
+			System.out.println("Packet sent successfully.");
+		}
+		else
+		{
+			System.out.println("Failed to send packet.");
+		}
+		
+		return;
+		
+	}
+
+	/**
+	 * Generate RIP UDP packet
+	 */
+	public UDP generateUDPrip()
+	{
+		// Encapulate the RIP packet in a UDP packet
+		UDP udpPacket = new UDP();
+
+		// Set the source and destination ports
+		udpPacket.setSourcePort((short) 520);
+		udpPacket.setDestinationPort((short) 520);
+
+		// Set the length and checksum to 0, calculated in serialization
+		udpPacket.setLength((short) 0);
+		udpPacket.setChecksum((short) 0);
+
+		// Set the payload to the RIP packet
+		udpPacket.setPayload(this.RIPtable);
+
+		// return the UDP packet
+		return udpPacket;
 
 	}
+
+
 
 }
