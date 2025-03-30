@@ -15,25 +15,29 @@ public class RIPv2Entry
 	protected int subnetMask;
 	protected int nextHopAddress;
 	protected int metric;
+    protected long lastUpdateTime; // BTD -- added for time tracking
+    protected boolean needsRemoval = false; // BTD -- added for removing entries
 
     public RIPv2Entry()
     { }
 
-    public RIPv2Entry(int address, int subnetMask, int metric)
+    public RIPv2Entry(int address, int subnetMask, int metric, long millTime)
     {
         this.addressFamily = ADDRESS_FAMILY_IPv4;
         this.address = address;
         this.subnetMask = subnetMask;
         this.metric = metric;
+        this.lastUpdateTime = millTime; // BTD -- added for time tracking
     }
 
 	public String toString()
 	{
-        return String.format("RIPv2Entry : {addressFamily=%d, routeTag=%d, address=%s, subnetMask=%s, nextHopAddress=%s, metric=%d}", 
+        return String.format("RIPv2Entry : {addressFamily=%d, routeTag=%d, address=%s, subnetMask=%s, nextHopAddress=%s, metric=%d, lastUpdateTime=%d}", 
                 this.addressFamily, this.routeTag, 
                 IPv4.fromIPv4Address(this.address), 
                 IPv4.fromIPv4Address(this.subnetMask),
-                IPv4.fromIPv4Address(this.nextHopAddress), this.metric);
+                IPv4.fromIPv4Address(this.nextHopAddress), this.metric),
+                this.lastUpdateTime; // BTD -- added for time tracking
 	}
 
     public short getAddressFamily()
@@ -71,6 +75,18 @@ public class RIPv2Entry
 
     public void setMetric(int metric)
     { this.metric = metric; }
+
+    public long getTime() // BTD -- added for time tracking
+    { return this.lastUpdateTime; }
+
+    public void setTime(long millTime) // BTD -- added for time tracking
+    { this.lastUpdateTime = millTime; }
+
+    public boolean isExpired(long millTime) // BTD -- added for time tracking
+    { return (millTime - this.lastUpdateTime) > 30000; }
+
+    public void expireEntry() // BTD -- set the entry to expired (cleaning up entries from table not in scope of project)
+    { this.metric = 16; }
 
 	public byte[] serialize() 
     {
