@@ -237,18 +237,23 @@ public class Router extends Device
 	 */
 	public boolean checkForRIP(IPv4 ipPacket)
 	{
+		// All inner packet layers are already deserialized
+
 		// Is this a UDP packet
-		if (false){
+		if (! UDP.equals(ipPacket.getPayload())){
 			return false;
 		}
 
+		// Expected target port
+		short tPort = 520;
+
 		// Is this a UDP packet hitting expected port 520
-		if (false){
+		if (ipPacket.getPayload().getDestinationPort != tPort){
 			return false;
 		}
 		
 		// If this is a response, update existing data (also handle if it is a request)
-		reviewRIPdata();
+		reviewRIPdata(false, ipPacket); // Sending UDP layer
 
 		return true;
 	}
@@ -258,21 +263,121 @@ public class Router extends Device
 	 */
 	public void checkLastRIPTime()
 	{	
-		// Check time
-		// Check for expired entries
-		// Send responseRIP if needed
+		// Save current time and set update flag to false
+		long currentTime = System.currentTimeMillis();
+    	boolean sendUpdate = false;
 
+		// Iterate through the routing table to check for expired entries
+		sendUpdate = checkExpiredEntries();
+
+		// Check if the last RIP check was more than 10 seconds ago
+		if ((currentTime - LastRIPCheckTime) > 10000) {
+			// Send a RIP request to all neighbors
+			sendRIP(true); // Assume this method sends a RIP request to all neighbors
+			LastRIPCheckTime = currentTime; // Update the last RIP check time
+			return;
+		}
+
+		// Send a RIP response update if any entries were marked expired 
+		if (sendUpdate) {
+			sendRIP(false); // Assume this method sends a RIP response to all neighbors
+		}
+		
+		return;
+
+	}
+
+	/**
+	 * BTD - Check for expired entries in RIP table, return true if any updates
+	 */
+	public boolean checkExpiredEntries()
+	{
+		boolean foundExpired = false;
+		// Check if any entries have expired
+		for (RIPv2Entry entry : this.RIPtable.getEntries()) {
+			if (entry.isExpired(System.currentTimeMillis())) {
+				
+				foundExpired = true; // Found an expired entry
+			}
+		}
+		// Remove all expired entries from the RIP table
+		this.RIPtable.removeEntries();
+		return foundExpired;
 	}
 
 	/**
 	 * BTD - Check if new data provided from RIP message
 	 * @param boolean document whether or not response is required
 	 */
-	public void reviewRIPdata(boolean needsResponse)
+	public void reviewRIPdata(boolean needsResponse, IPv4 ipPacket)
 	{
+		// Extract the UDP Packet
+		UDP udpData = ipPacket.getPayload();  
+		// Extract the RIP data
+		RIPv2 receivedRIPdata = udpData.getPayload();
 
-		// OR statement handling, if table was update or a request was sent then send response
+		// Initialize to no updates
+		boolean foundUpdates = false;
+
+		// Loop over entries sent, if any updates to table then will change flag to send update
+		for (RIPv2Entry entry : receivedRIPdata.getEntries()) {
+			// Assume updateRoutingTable returns true if the table was changed
+			if (updateRoutingTable(entry)) {
+				foundUpdates = true;
+			}
+    	}
+
+		// OR statement handling, if table was updated or a request was sent then send response
+		if (foundUpdates || needsResponse) {
+			sendRIP();
+		}
 	}
+
+	/**
+	 * Updates the routing table with a new RIP entry.
+	 * Returns true if the table was changed due to the new entry.
+	 */
+	private boolean updateRoutingTable(RIPv2Entry entry) {
+	    // Extract information from the new entry
+	    int targetSubnet = entry.getAddress();
+	    int subnetMask = entry.getSubnetMask();
+	    int metric = entry.getMetric() + 1; // Increment metric for the next hop
+		long entryAge = System.currentTimeMillis() - entry.getTime();
+
+	    // Check if the metric is invalid (RIP metric 16 means unreachable or older than 30 seconds)
+	    if (metric >= 16 || entryAge > 30000) {
+	        return false;
+	    }
+
+
+	    // Loop over the routing table to find an existing entry
+		for (RIPv2Entry existingEntry : this.RIPtable.getEntries()) {
+			if (existingEntry.getAddress() == targetSubnet) {
+				// If the entry already exists, compare metrics and take best
+				if (metric < existingEntry.getMetric()) {
+					existingEntry.setMetric(metric);
+					existingEntry.setTime(System.currentTimeMillis());
+					return true;
+				} else {
+					return false; // No update needed, found a match but it was better already
+				}
+			}
+		}
+
+	    // If no existing route or the new route has a better metric, update the table
+	    if (existingEntry == null || metric < existingEntry.getMetric()) {
+			// New an entry for the routing table
+			RIPv2Entry newEntry = new RIPv2Entry(targetSubnet, subnetMask, metric);
+			this.RIPtable.addEntry(newEntry);
+			// Update the last update time
+			newEntry.setTime(System.currentTimeMillis());
+			// Return true to indicate the table was changed
+	        return true;
+	    }
+
+	    // If the existing route is better or equal, do nothing
+	    return false;
+		}
 
 	//------------------------------------- RIP -> UDP packet -> IP packet for order of encapsulation
 
