@@ -150,7 +150,8 @@ public class Router extends Device
 		}
 
 		// BTD - Check if UDP message containing RIP
-		 if (checkForRIP(ipPacket)) {
+		 if (checkForRIP(ipPacket, etherPacket.getSourceMACAddress())) {
+			System.out.println("Received RIP packet. No further processing required in Router.handlePacket.");
 			return; // Perform no further processing if this is a UDP packet for RIP
 		 }
 
@@ -235,7 +236,7 @@ public class Router extends Device
 	/**
 	 * BTD - UDP Packet checking and handling
 	 */
-	public boolean checkForRIP(IPv4 ipPacket)
+	public boolean checkForRIP(IPv4 ipPacket, byte macAddress)
 	{
 		// All inner packet layers are already deserialized
 
@@ -244,16 +245,13 @@ public class Router extends Device
 			return false;
 		}
 
-		// Expected target port
-		short tPort = 520;
-
 		// Is this a UDP packet hitting expected port 520
-		if (ipPacket.getPayload().getDestinationPort != tPort){
+		if (ipPacket.getPayload().getDestinationPort != UDP.RIP_PORT) {
 			return false;
 		}
 		
 		// If this is a response, update existing data (also handle if it is a request)
-		reviewRIPdata(false, ipPacket); // Sending UDP layer
+		reviewRIPdata(false, ipPacket, macAddress); // Sending UDP layer
 
 		return true;
 	}
@@ -309,7 +307,7 @@ public class Router extends Device
 	 * BTD - Check if new data provided from RIP message
 	 * @param boolean document whether or not response is required
 	 */
-	public void reviewRIPdata(boolean needsResponse, IPv4 ipPacket)
+	public void reviewRIPdata(boolean needsResponse, IPv4 ipPacket, byte macAddress)
 	{
 		// Extract the UDP Packet
 		UDP udpData = ipPacket.getPayload();  
@@ -386,7 +384,7 @@ public class Router extends Device
 	 * @param byte command type of RIP message
 	 * @param Iface interface to send the packet on (if this is broadcast, should pass null)
 	 */
-	public void sendRIP(byte command_type, IPv4 ipPacket)
+	public void sendRIP(byte command_type, IPv4 ipPacket, byte byteMacAddress)
 	{
 		// Check if RIP is active
 		if (!RIPActive) {
@@ -400,6 +398,7 @@ public class Router extends Device
 			return;
 		}
 
+
 		// Set the command type
 		this.RIPtable.setCommand(command_type, iface);
 
@@ -408,10 +407,15 @@ public class Router extends Device
 
 		// Check if interface is in list of interfaces
 		if (ipPacket.getDestinationAddress() == null) {
+			// Set broadcast IP address for RIP 224.0.0.9
+			int braodcastIP = IPv4.toIPv4Address("224.0.0.9");
+			// Set broadcast mac address
+			MACAddress broadcastMac = new MACAddress("FF:FF:FF:FF:FF:FF");
+			
 			// Rotate through interfaces on router
 			for (Iface iface : this.interfaces.values()) {
 				// Send the packet
-				sendIPv4rip(iface);
+				sendIPv4rip(iface, braodcastIP, broadcastMac); // Sending a specific response
 			}
 		}
 		else (ipPacket.getDestinationAddress() != null){
@@ -419,8 +423,10 @@ public class Router extends Device
 				System.out.println("Invalid interface. Cannot send RIP request.");
 			} 
 			else if (this.RIPtable.getCommand() == 2) {
-					// Send the packet
-					sendIPv4rip(ipPacket.getDestinationAddress());
+				// Verify the mac address
+				MACAddress macAddress = new MACAddress(byteMacAddress);
+				// Send the packet
+				sendIPv4rip(ipPacket.getDestinationAddress(), ipPacket.setDestinationAddress(ipPacket.getSourceAddress()), macAddress); // Broadcasting to all interfaces
 			} else {
 				System.out.println("Invalid command type. Must be type 2 if sending out targetted interface.");
 			}
@@ -436,7 +442,7 @@ public class Router extends Device
 	 * Generate IPv4 for RIP
 	 * @param Iface interface to send the packet on (if this is broadcast, should pass null)
 	 */
-	public IPv4 sendIPv4rip(Iface iface)
+	public IPv4 sendIPv4rip(Iface iface,int dest_ip,MACAddress dest_mac)
 	{
 		// Make sure a valid interface was sent
 		if (iface == null) {
@@ -489,8 +495,8 @@ public class Router extends Device
 		UDP udpPacket = new UDP();
 
 		// Set the source and destination ports
-		udpPacket.setSourcePort((short) 520);
-		udpPacket.setDestinationPort((short) 520);
+		udpPacket.setSourcePort(UDP.RIP_PORT);
+		udpPacket.setDestinationPort(UDP.RIP_PORT);
 
 		// Set the length and checksum to 0, calculated in serialization
 		udpPacket.setLength((short) 0);
