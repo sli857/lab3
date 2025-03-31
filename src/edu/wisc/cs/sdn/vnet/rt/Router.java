@@ -295,7 +295,6 @@ public class Router extends Device
 				dst_ip = ip & entry.getSubnetMask();
 
 				// Break up the IP address into 4 bytes
-				int[] ip_bytes = new int[4];
 				table_ip_bytes[0] = (int) ((table_ip >> 24) & 0xFF);
 				table_ip_bytes[1] = (int) ((table_ip >> 16) & 0xFF);
 				table_ip_bytes[2] = (int) ((table_ip >> 8) & 0xFF);
@@ -314,8 +313,8 @@ public class Router extends Device
 				// Loop over bytes and compare to determine if they match
 				for (int i = 0; i < 4; i++)
 				{
-					System.out.println(String.format("Comparing table byte: %d, with destination byte: %d", ip_bytes[i] , dst_ip_bytes[i]));
-					if (ip_bytes[i] == dst_ip_bytes[i])
+					System.out.println(String.format("Comparing table byte: %d, with destination byte: %d", table_ip_bytes[i] , dst_ip_bytes[i]));
+					if (table_ip_bytes[i] == dst_ip_bytes[i])
 					{
 						// Check if the prefix match is longer than the current max
 						if (i >= max_match)
