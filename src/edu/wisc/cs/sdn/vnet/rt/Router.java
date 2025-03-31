@@ -194,6 +194,10 @@ public class Router extends Device
 		// Check if destination IP is in routing table
 		if (RIPActive) {
 			bestMatch = RIPlookup(ipPacket.getDestinationAddress());
+			if (bestMatch == null) {
+				System.out.println("No matching route in RIP routing table. Dropping packet.");
+				return;
+			}
 
 		}
 		else {
@@ -342,8 +346,8 @@ public class Router extends Device
 			else if (matching_entry.getNextHopAddress() == 0) {
 				// This router is the source of the information
 				// Return the interface associated with the entry
-				for (Iface iface : this.interfaces.values()) {
-					if (iface.getIpAddress() == matching_entry.getAddress()) {
+				for (Iface iface : this.interfaces.values()) { // entry.getAddress() & entry.getSubnetMask()
+					if ((iface.getIpAddress() & iface.getSubnetMask()) == matching_entry.getAddress()) {
 						return iface; // Return the matching interface
 					}
 				}
@@ -352,7 +356,7 @@ public class Router extends Device
 			else {
 			// Based on the entry, find the best interface
 			for (Iface iface : this.interfaces.values()) {
-				if (iface.getIpAddress() == matching_entry.getNextHopAddress()) {
+				if ((iface.getIpAddress() & iface.getSubnetMask()) == matching_entry.getNextHopAddress()) {
 					return iface; // Return the matching interface
 					}
 				}
