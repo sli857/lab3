@@ -296,10 +296,10 @@ public class Router extends Device
 
 				// Break up the IP address into 4 bytes
 				int[] ip_bytes = new int[4];
-				table_ip_bytes[0] = (table_ip >> 24) & 0xFF;
-				table_ip_bytes[1] = (table_ip >> 16) & 0xFF;
-				table_ip_bytes[2] = (table_ip >> 8) & 0xFF;
-				table_ip_bytes[3] = table_ip & 0xFF;
+				table_ip_bytes[0] = (int) ((table_ip >> 24) & 0xFF);
+				table_ip_bytes[1] = (int) ((table_ip >> 16) & 0xFF);
+				table_ip_bytes[2] = (int) ((table_ip >> 8) & 0xFF);
+				table_ip_bytes[3] = (int) (table_ip & 0xFF);
 
 				// Break up the destination IP address into 4 bytes
 				dst_ip_bytes[0] = (int) ((dst_ip >> 24) & 0xFF);
@@ -308,12 +308,13 @@ public class Router extends Device
 				dst_ip_bytes[3] = (int) ( dst_ip        & 0xFF);
 
 				// Print out the pair
-				System.out.println("Comparing table IP: " + table_ip_bytes);
+				System.out.println("Comparing table IP with destination IP:");
 				System.out.println("With destination IP: " + dst_ip_bytes);
 				
 				// Loop over bytes and compare to determine if they match
 				for (int i = 0; i < 4; i++)
 				{
+					System.out.println(String.format("Comparing table byte: %d, with destination byte: %d", ip_bytes[i] , dst_ip_bytes[i]));
 					if (ip_bytes[i] == dst_ip_bytes[i])
 					{
 						// Check if the prefix match is longer than the current max
