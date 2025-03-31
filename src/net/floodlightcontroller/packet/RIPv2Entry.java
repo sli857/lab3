@@ -3,146 +3,157 @@ package net.floodlightcontroller.packet;
 import java.nio.ByteBuffer;
 
 /**
-  * @author Anubhavnidhi Abhashkumar and Aaron Gember-Jacobson
-  */
+ * Represents a single entry in a RIPv2 routing table
+ */
 public class RIPv2Entry 
 {
     public static final short ADDRESS_FAMILY_IPv4 = 2;
 
-    protected short addressFamily;
-    protected short routeTag;
-	protected int address;
-	protected int subnetMask;
-	protected int nextHopAddress;
-	protected int metric;
-    protected long lastUpdateTime; // BTD -- added for time tracking
+    protected short afIdentifier;
+    protected short tagValue;
+    protected int networkAddress;
+    protected int maskValue;
+    protected int gatewayAddress;
+    protected int distanceValue;
+    protected long timestamp;
 
     public RIPv2Entry()
     { }
 
-    public RIPv2Entry(int address, int subnetMask, int metric, long millTime)
+    public RIPv2Entry(int networkAddress, int maskValue, int distanceValue, long timestamp)
     {
-        this.addressFamily = ADDRESS_FAMILY_IPv4;
-        this.address = address;
-        this.subnetMask = subnetMask;
-        this.metric = metric;
-        this.lastUpdateTime = millTime; // BTD -- added for time tracking
+        this.afIdentifier = ADDRESS_FAMILY_IPv4;
+        this.networkAddress = networkAddress;
+        this.maskValue = maskValue;
+        this.distanceValue = distanceValue;
+        this.timestamp = timestamp;
     }
 
-	public String toString()
-	{
+    public String toString()
+    {
         return String.format("RIPv2Entry : {addressFamily=%d, routeTag=%d, address=%s, subnetMask=%s, nextHopAddress=%s, metric=%d, lastUpdateTime=%d}", 
-                this.addressFamily, this.routeTag, 
-                IPv4.fromIPv4Address(this.address), 
-                IPv4.fromIPv4Address(this.subnetMask),
-                IPv4.fromIPv4Address(this.nextHopAddress), 
-                this.metric,
-                this.lastUpdateTime); // BTD -- added for time tracking
-	}
+                this.afIdentifier, this.tagValue, 
+                IPv4.fromIPv4Address(this.networkAddress), 
+                IPv4.fromIPv4Address(this.maskValue),
+                IPv4.fromIPv4Address(this.gatewayAddress), 
+                this.distanceValue,
+                this.timestamp);
+    }
 
     public short getAddressFamily()
-    { return this.addressFamily; }
+    { return this.afIdentifier; }
 
     public void setAddressFamily(short addressFamily)
-    { this.addressFamily = addressFamily; }
+    { this.afIdentifier = addressFamily; }
 
     public short getRouteTag()
-    { return this.routeTag; }
+    { return this.tagValue; }
 
     public void setRouteTag(short routeTag)
-    { this.routeTag = routeTag; }
+    { this.tagValue = routeTag; }
 
-	public int getAddress()
-	{ return this.address; }
+    public int getAddress()
+    { return this.networkAddress; }
 
-	public void setAddress(int address)
-	{ this.address = address; }
+    public void setAddress(int address)
+    { this.networkAddress = address; }
 
-	public int getSubnetMask()
-	{ return this.subnetMask; }
+    public int getSubnetMask()
+    { return this.maskValue; }
 
-	public void setSubnetMask(int subnetMask)
-	{ this.subnetMask = subnetMask; }
+    public void setSubnetMask(int subnetMask)
+    { this.maskValue = subnetMask; }
 
-	public int getNextHopAddress()
-	{ return this.nextHopAddress; }
+    public int getNextHopAddress()
+    { return this.gatewayAddress; }
 
-	public void setNextHopAddress(int nextHopAddress)
-	{ this.nextHopAddress = nextHopAddress; }
+    public void setNextHopAddress(int nextHopAddress)
+    { this.gatewayAddress = nextHopAddress; }
 
     public int getMetric()
-    { return this.metric; }
+    { return this.distanceValue; }
 
     public void setMetric(int metric)
-    { this.metric = metric; }
+    { this.distanceValue = metric; }
 
-    public long getTime() // BTD -- added for time tracking
-    { return this.lastUpdateTime; }
+    public long getTime()
+    { return this.timestamp; }
 
-    public void setTime(long millTime) // BTD -- added for time tracking
-    { this.lastUpdateTime = millTime; }
+    public void setTime(long millTime)
+    { this.timestamp = millTime; }
 
-    public boolean isExpired(long millTime) // BTD -- added for time tracking
+    /**
+     * Checks if this entry has expired based on the current timestamp
+     * If expired, marks the entry as unreachable
+     * 
+     * @param currentTime Current system time in milliseconds
+     * @return true if the entry was marked as expired
+     */
+    public boolean isExpired(long currentTime)
     { 
-        if ((millTime - this.lastUpdateTime) > 30000) {
-            this.metric = 16; // set to infinity
+        long ageInMillis = currentTime - this.timestamp;
+        if (ageInMillis > 30000) {
+            this.distanceValue = 16; // Set to infinity (unreachable)
             return true;
-            }
+        }
         return false;
     }
 
-    public void expireEntry() // BTD -- set the entry to expired (cleaning up entries from table not in scope of project)
-    {  }
+    /**
+     * Marks this entry as expired
+     * Note: Actual removal from routing table handled elsewhere
+     */
+    public void expireEntry()
+    { 
+        // Implementation not required per project scope
+    }
 
-	public byte[] serialize() 
+    public byte[] serialize() 
     {
-		int length = 2*2 + 4*4;
-		byte[] data = new byte[length];
-		ByteBuffer bb = ByteBuffer.wrap(data);
+        int entryLength = 2*2 + 4*4; // 2 shorts (2 bytes each) + 4 ints (4 bytes each)
+        byte[] serialized = new byte[entryLength];
+        ByteBuffer buffer = ByteBuffer.wrap(serialized);
 
-		bb.putShort(this.addressFamily);
-		bb.putShort(this.routeTag);
-        bb.putInt(this.address);
-        bb.putInt(this.subnetMask);
-        bb.putInt(this.nextHopAddress);
-        bb.putInt(this.metric);
-		return data;
-	}
+        buffer.putShort(this.afIdentifier);
+        buffer.putShort(this.tagValue);
+        buffer.putInt(this.networkAddress);
+        buffer.putInt(this.maskValue);
+        buffer.putInt(this.gatewayAddress);
+        buffer.putInt(this.distanceValue);
+        return serialized;
+    }
 
-	public RIPv2Entry deserialize(byte[] data, int offset, int length) 
-	{
-		ByteBuffer bb = ByteBuffer.wrap(data, offset, length);
+    public RIPv2Entry deserialize(byte[] data, int offset, int length) 
+    {
+        ByteBuffer buffer = ByteBuffer.wrap(data, offset, length);
 
-		this.addressFamily = bb.getShort();
-		this.routeTag = bb.getShort();
-        this.address = bb.getInt();
-        this.subnetMask = bb.getInt();
-        this.nextHopAddress = bb.getInt();
-        this.metric = bb.getInt();
-		return this;
-	}
+        this.afIdentifier = buffer.getShort();
+        this.tagValue = buffer.getShort();
+        this.networkAddress = buffer.getInt();
+        this.maskValue = buffer.getInt();
+        this.gatewayAddress = buffer.getInt();
+        this.distanceValue = buffer.getInt();
+        return this;
+    }
 
+    @Override
     public boolean equals(Object obj)
     {
-        if (this == obj)
-        { return true; }
-        if (null == obj)
-        { return false; }
-        if (!(obj instanceof RIPv2Entry))
-        { return false; }
+        if (this == obj) { 
+            return true; 
+        }
+        
+        if (obj == null || !(obj instanceof RIPv2Entry)) { 
+            return false; 
+        }
+        
         RIPv2Entry other = (RIPv2Entry)obj;
-        if (this.addressFamily != other.addressFamily)
-        { return false; }
-        if (this.routeTag != other.routeTag)
-        { return false; }
-        if (this.address != other.address)
-        { return false; }
-        if (this.subnetMask != other.subnetMask)
-        { return false; }
-        if (this.nextHopAddress != other.nextHopAddress)
-        { return false; }
-        if (this.metric != other.metric)
-        { return false; }
-        return true; 
+        
+        return this.afIdentifier == other.afIdentifier &&
+               this.tagValue == other.tagValue &&
+               this.networkAddress == other.networkAddress &&
+               this.maskValue == other.maskValue &&
+               this.gatewayAddress == other.gatewayAddress &&
+               this.distanceValue == other.distanceValue;
     }
 }
