@@ -156,22 +156,25 @@ public class Router extends Device
 			return;
 		}
 
-		// Temporarily store ethernet and ip packet details
-		this.tempStoreEthernet = etherPacket;
-		this.tempStoreIPv4 = ipPacket;
+		
 
 		// BTD - Check if UDP message containing RIP
-		 if (checkForRIP()) {
-			System.out.println("Received RIP packet. No further processing required in Router.handlePacket.");
+		if (RIPActive) {
+			// Temporarily store ethernet and ip packet details
+			this.tempStoreEthernet = etherPacket;
+			this.tempStoreIPv4 = ipPacket;
+
+			if (checkForRIP()) {
+				System.out.println("Received RIP packet. No further processing required in Router.handlePacket.");
+				// Reset the tempStoreEthernet and tempStoreIPv4
+				this.tempStoreEthernet = null;
+				this.tempStoreIPv4 = null;
+				return; // Perform no further processing if this is a UDP packet for RIP
+			}
 			// Reset the tempStoreEthernet and tempStoreIPv4
 			this.tempStoreEthernet = null;
 			this.tempStoreIPv4 = null;
-			return; // Perform no further processing if this is a UDP packet for RIP
-		 }
-		
-		// Reset the tempStoreEthernet and tempStoreIPv4
-		this.tempStoreEthernet = null;
-		this.tempStoreIPv4 = null;
+		}
 
 		// Recalculate checksum of the IP packet
 		ipPacket.resetChecksum();
@@ -186,12 +189,20 @@ public class Router extends Device
 		}
 
 		// BTD - need alternative handling for when RIP is active to replace using routeTable.lookup, can borrow code though
+		Iface bestMatch;
 
 		// Check if destination IP is in routing table
-		RouteEntry bestMatch = this.routeTable.lookup(ipPacket.getDestinationAddress()); // BTD - only instance of use of routeTable
-		if (bestMatch == null) {
-			System.out.println("No matching route in routing table. Dropping packet.");
-			return;
+		if (RIPActive) {
+			bestMatch = RIPlookup(ipPacket.getDestinationAddress());
+
+		}
+		else {
+			RouteEntry bestRouteMatch = this.routeTable.lookup(ipPacket.getDestinationAddress()); // BTD - only instance of use of routeTable
+			if (bestRouteMatch == null) {
+				System.out.println("No matching route in routing table. Dropping packet.");
+				return;
+			}
+			bestMatch = bestRouteMatch.getInterface();
 		}
 
 		// Check ARP cache for MAC address
@@ -207,12 +218,12 @@ public class Router extends Device
 
 		// Make updates to the Ethernet packet
 		etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
-		etherPacket.setSourceMACAddress(bestMatch.getInterface().getMacAddress().toBytes());
+		etherPacket.setSourceMACAddress(bestMatch.getMacAddress().toBytes());
 		etherPacket.setPayload(ipPacket);
 
 		/***************************** Call sendPacket() with the appropriate arguments *************************/
 		System.out.println("Attempting to send packet to next hop.");
-		if (sendPacket(etherPacket, bestMatch.getInterface()))
+		if (sendPacket(etherPacket, bestMatch))
 		{
 			System.out.println("Packet sent successfully.");
 		}
@@ -250,6 +261,96 @@ public class Router extends Device
 	}
 
 	/*********************************** Handling for RIP ***********************************/
+
+	/**
+	 * BTD - Find if their is a matching route in the RIP table for a given IP address
+	 * @param int ipAddress the IP address to check
+	 * @return  the matching route entry, or null if not found
+	 */
+
+	public Iface RIPlookup(int ip)
+	{
+			// Check if the RIP table is empty
+			if (this.RIPtable.getEntries().isEmpty())
+			{ return null; }
+
+			// Check if the IP address is 0
+			if (ip == 0)
+			{ return null; }
+			
+			// Initialize
+			int max_match = 0;
+			RIPv2Entry matching_entry = null;
+			int table_ip = 0;
+			int dst_ip = 0;
+			int[] dst_ip_bytes = new int[4];
+			int[] table_ip_bytes = new int[4];	
+
+			// Iterate through the RIP table
+			for (RIPv2Entry entry : this.RIPtable.getEntries())
+			{
+				
+				// Get the destination IP
+				table_ip = entry.getAddress() & entry.getSubnetMask();
+				dst_ip = ip & entry.getSubnetMask();
+
+				// Break up the IP address into 4 bytes
+				int[] ip_bytes = new int[4];
+				table_ip_bytes[0] = (table_ip >> 24) & 0xFF;
+				table_ip_bytes[1] = (table_ip >> 16) & 0xFF;
+				table_ip_bytes[2] = (table_ip >> 8) & 0xFF;
+				table_ip_bytes[3] = table_ip & 0xFF;
+
+				// Break up the destination IP address into 4 bytes
+				dst_ip_bytes[0] = (int) ((dst_ip >> 24) & 0xFF);
+				dst_ip_bytes[1] = (int) ((dst_ip >> 16) & 0xFF);
+				dst_ip_bytes[2] = (int) ((dst_ip >> 8)  & 0xFF);
+				dst_ip_bytes[3] = (int) ( dst_ip        & 0xFF);
+				
+				// Loop over bytes and compare to determine if they match
+				for (int i = 0; i < 4; i++)
+				{
+					if (ip_bytes[i] == dst_ip_bytes[i])
+					{
+						// Check if the prefix match is longer than the current max
+						if (i >= max_match)
+						{
+							max_match = i+1;
+							matching_entry = entry;
+						}
+					}
+					else
+					{break;}
+				}
+			}
+
+			// Determine the interface based on the matching entry
+			if (matching_entry == null) {
+				return null; // No matching entry found
+			}
+			else if (matching_entry.getMetric() == 16) {
+				return null; // Entry is unreachable
+			}
+			else if (matching_entry.getNextHopAddress() == 0) {
+				// This router is the source of the information
+				// Return the interface associated with the entry
+				for (Iface iface : this.interfaces.values()) {
+					if (iface.getIpAddress() == matching_entry.getAddress()) {
+						return iface; // Return the matching interface
+					}
+				}
+				return null; // Entry is unreachable
+			}
+			else {
+			// Based on the entry, find the best interface
+			for (Iface iface : this.interfaces.values()) {
+				if (iface.getIpAddress() == matching_entry.getNextHopAddress()) {
+					return iface; // Return the matching interface
+					}
+				}
+			}
+			return null; // Entry is unreachable
+	}
 
 	/**
 	 * BTD - UDP Packet checking and handling
