@@ -67,7 +67,9 @@ public class Router extends Device
 	 */
 	public void startRIPTable()
 	{
-		
+		// Initialize RIP table
+		System.out.println("Attempting to start RIP table.");
+
 		// Initialize key values in Router
 		this.RIPActive = true;
 		this.RIPtable = new RIPv2();
@@ -239,7 +241,7 @@ public class Router extends Device
 	public boolean checkForRIP(IPv4 ipPacket, byte macAddress)
 	{
 		// All inner packet layers are already deserialized
-		System.out.println("Examing pack for RIP in Router.checkForRIP.");
+		System.out.println("Examining pack for RIP in Router.checkForRIP.");
 
 		// Is this a UDP packet
 		if (! UDP.equals(ipPacket.getPayload())){
@@ -251,18 +253,23 @@ public class Router extends Device
 			return false;
 		}
 		
+		// Have received a UDPpacket, check if it is a RIP packet
+		System.out.println("Have confirmed is UDP at port 520, Router.checkForRIP.");
+
 		// If this is a request, update existing data (also handle if it is a request) and respond
 		if (ipPacket.getPayload().getPayload().getCommand() == RIPv2.COMMAND_REQUEST) {
-			// Check if this is a request or response
 			reviewRIPdata(true, ipPacket, macAddress); // Sending UDP layer
-		} else if (ipPacket.getPayload().getPayload().getCommand() == RIPv2.COMMAND_RESPONSE) {
-			// Check if this is a request or response
+		} // If this is a response, update existing data
+		else if (ipPacket.getPayload().getPayload().getCommand() == RIPv2.COMMAND_RESPONSE) {
 			reviewRIPdata(false, ipPacket, macAddress); // Sending UDP layer
-		} else {
+		} // If this is neither, raise an error
+		else {
 			System.out.println("Invalid command type in received packet. Cannot process RIP request in Router.checkForRIP.");
 			return true; // Invalid command type
 		}
 		
+		// Return true to indicate that the packet was processed
+		System.out.println("Have successfully processed UDP message, Router.checkForRIP.");
 
 		return true;
 	}
@@ -273,6 +280,9 @@ public class Router extends Device
 	 */
 	public void reviewRIPdata(boolean needsResponse, IPv4 ipPacket, byte macAddress)
 	{
+		// Reviewing received RIP data
+		System.out.println("Reviewing received RIP data in Router.reviewRIPdata.");
+
 		// Extract the UDP Packet
 		UDP udpData = ipPacket.getPayload();  
 		// Extract the RIP data
@@ -293,6 +303,10 @@ public class Router extends Device
 		if (foundUpdates || needsResponse) {
 			sendRIP(RIPv2.COMMAND_RESPONSE, ipPacket, macAddress); 
 		}
+
+		// Have reviewed the received RIP data
+		System.out.println("Completed review of RIP data in Router.reviewRIPdata.");
+
 	}
 
 	/**
@@ -353,6 +367,10 @@ public class Router extends Device
 	 */
 	private boolean updateRoutingTable(RIPv2Entry entry, IPv4 ipPacket, byte macAddress) {
 	    
+		// Starting review of table
+		System.out.println("Reviewing routing table for a single entry in Router.updateRoutingTable.");
+		entry.toString();
+
 		// Extract information from the new entry
 	    int targetSubnet = entry.getAddress();
 	    int subnetMask = entry.getSubnetMask();
@@ -397,7 +415,8 @@ public class Router extends Device
 			} 
 		}
 
-
+		// The entry is new to the table
+		System.out.println("Entry is new to the table in  Router.updateRoutingTable.");
 
 	    // Make sure path isn't infinity, if it is not add to table
 	    if (entry.getMetric() < 16) {
@@ -414,6 +433,9 @@ public class Router extends Device
 			// Return true to indicate the table was changed
 	        return true;
 	    }
+
+		// The entry was not integrated into table
+		System.out.println("Entry is was not added to the table in  Router.updateRoutingTable.");
 
 	    // If the existing route is better or equal, or the path given is infinite, return false and no changes
 	    return false;
@@ -439,6 +461,8 @@ public class Router extends Device
 			System.out.println("Invalid command type. Cannot send RIP request.");
 			return;
 		}
+
+		System.out.println("RIP is active and a proper command type in Router.sendRIP");
 
 
 		// Set the command type
