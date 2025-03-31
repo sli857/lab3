@@ -16,7 +16,6 @@ public class RIPv2Entry
 	protected int nextHopAddress;
 	protected int metric;
     protected long lastUpdateTime; // BTD -- added for time tracking
-    protected boolean needsRemoval = false; // BTD -- added for removing entries
 
     public RIPv2Entry()
     { }
@@ -82,11 +81,17 @@ public class RIPv2Entry
     public void setTime(long millTime) // BTD -- added for time tracking
     { this.lastUpdateTime = millTime; }
 
-    public boolean isExpired(long millTime) // BTD -- added for time tracking
-    { return (millTime - this.lastUpdateTime) > 30000; }
+    public void isExpired(long millTime) // BTD -- added for time tracking
+    { 
+        if ((millTime - this.lastUpdateTime) > 30000) {
+            this.metric = 16; // set to infinity
+            return true;
+            }
+        return false;
+    }
 
     public void expireEntry() // BTD -- set the entry to expired (cleaning up entries from table not in scope of project)
-    { this.metric = 16; }
+    {  }
 
 	public byte[] serialize() 
     {
