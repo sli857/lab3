@@ -330,7 +330,7 @@ public class Router extends Device
 
 			// Print out matching entry
 			System.out.println("Matching entry in RIP table:");
-			matching_entry.toString();
+			System.out.println(matching_entry.toString());
 
 			// Determine the interface based on the matching entry
 			if (matching_entry == null) {
