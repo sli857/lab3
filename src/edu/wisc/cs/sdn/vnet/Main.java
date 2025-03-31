@@ -88,7 +88,7 @@ public class Main
 			// Read static route table
 			if (routeTableFile != null)
 			{ ((Router)dev).loadRouteTable(routeTableFile); }
-			else { ((Router)dev).startRIPTable(routeTableFile); } // BTD - else statement here for triggering RIP
+			else { ((Router)dev).startRIPTable(); } // BTD - else statement here for triggering RIP
 			
 			// Read static ACP cache
 			if (arpCacheFile != null)

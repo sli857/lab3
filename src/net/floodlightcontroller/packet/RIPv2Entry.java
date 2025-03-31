@@ -35,8 +35,9 @@ public class RIPv2Entry
                 this.addressFamily, this.routeTag, 
                 IPv4.fromIPv4Address(this.address), 
                 IPv4.fromIPv4Address(this.subnetMask),
-                IPv4.fromIPv4Address(this.nextHopAddress), this.metric),
-                this.lastUpdateTime; // BTD -- added for time tracking
+                IPv4.fromIPv4Address(this.nextHopAddress), 
+                this.metric,
+                this.lastUpdateTime); // BTD -- added for time tracking
 	}
 
     public short getAddressFamily()
@@ -81,7 +82,7 @@ public class RIPv2Entry
     public void setTime(long millTime) // BTD -- added for time tracking
     { this.lastUpdateTime = millTime; }
 
-    public void isExpired(long millTime) // BTD -- added for time tracking
+    public boolean isExpired(long millTime) // BTD -- added for time tracking
     { 
         if ((millTime - this.lastUpdateTime) > 30000) {
             this.metric = 16; // set to infinity
