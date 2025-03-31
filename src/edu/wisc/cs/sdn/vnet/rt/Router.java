@@ -306,6 +306,10 @@ public class Router extends Device
 				dst_ip_bytes[1] = (int) ((dst_ip >> 16) & 0xFF);
 				dst_ip_bytes[2] = (int) ((dst_ip >> 8)  & 0xFF);
 				dst_ip_bytes[3] = (int) ( dst_ip        & 0xFF);
+
+				// Print out the pair
+				System.out.println("Comparing table IP: " + table_ip_bytes);
+				System.out.println("With destination IP: " + dst_ip_bytes);
 				
 				// Loop over bytes and compare to determine if they match
 				for (int i = 0; i < 4; i++)
