@@ -16,19 +16,20 @@ import net.floodlightcontroller.packet.RIPv2Entry;
 public class Router extends Device
 {	
 	private RouteTable forwardingTable;
-	private ArpCache addressCache;
+	private ArpCache addressTable;
 
 	private boolean ripEnabled = false;
 	private RIPv2 ripDatabase;
-	private long lastRipUpdateTimestamp;
-	private IPv4 currentIpPacket;
-	private Ethernet currentEtherFrame;
+	private long ripLastUpdateTimestamp;
+	private IPv4 cachedIpPacket;
+	private Ethernet cachedEthernetFrame;
+	private Iface cachedInterface;
 	
-	public Router(String host, DumpFile logfile)
+	public Router(String hostname, DumpFile packetLog)
 	{
-		super(host, logfile);
+		super(hostname, packetLog);
 		this.forwardingTable = new RouteTable();
-		this.addressCache = new ArpCache();
+		this.addressTable = new ArpCache();
 	}
 	
 	public RouteTable getRouteTable()
@@ -36,15 +37,15 @@ public class Router extends Device
 		return this.forwardingTable; 
 	}
 	
-	public void loadRouteTable(String routeTableFile)
+	public void loadRouteTable(String configFile)
 	{
-		if (!forwardingTable.load(routeTableFile, this))
+		if (!forwardingTable.load(configFile, this))
 		{
-			System.err.println("Failed to initialize routing table from file " + routeTableFile);
+			System.err.println("Failed to initialize routing table from " + configFile);
 			System.exit(1);
 		}
 		
-		System.out.println("Loaded static route table");
+		System.out.println("Static route table loaded successfully");
 		System.out.println("-------------------------------------------------");
 		System.out.print(this.forwardingTable.toString());
 		System.out.println("-------------------------------------------------");
@@ -52,293 +53,264 @@ public class Router extends Device
 
 	public void startRIPTable()
 	{
-		System.out.println("Initializing RIP table...");
+		System.out.println("Initializing RIP protocol...");
 
 		this.ripEnabled = true;
 		this.ripDatabase = new RIPv2();
 
+		// Add directly connected networks
 		for (Iface networkInterface : this.interfaces.values()) {
-			int networkPrefix = networkInterface.getIpAddress() & networkInterface.getSubnetMask();
-			RIPv2Entry entry = new RIPv2Entry(networkPrefix, networkInterface.getSubnetMask(), 0, System.currentTimeMillis());
-			this.ripDatabase.addEntry(entry);
+			int network = networkInterface.getIpAddress() & networkInterface.getSubnetMask();
+			RIPv2Entry directEntry = new RIPv2Entry(network, networkInterface.getSubnetMask(), 0, System.currentTimeMillis());
+			this.ripDatabase.addEntry(directEntry);
 		}
 
+		// Broadcast RIP request
 		broadcastRipMessage(RIPv2.COMMAND_REQUEST);
-		this.lastRipUpdateTimestamp = System.currentTimeMillis();
+
+		// Initialize timer
+		this.ripLastUpdateTimestamp = System.currentTimeMillis();
 		
-		System.out.println("RIP table initialized");
+		System.out.println("RIP protocol initialized");
 		System.out.println("-------------------------------------------------");
 		System.out.print(this.ripDatabase.toString());
 		System.out.println("-------------------------------------------------");
 	}
 	
-	public void loadArpCache(String arpCacheFile)
+	public void loadArpCache(String cacheFile)
 	{
-		if (!addressCache.load(arpCacheFile))
+		if (!addressTable.load(cacheFile))
 		{
-			System.err.println("Failed to initialize ARP cache from file " + arpCacheFile);
+			System.err.println("Failed to initialize ARP cache from " + cacheFile);
 			System.exit(1);
 		}
 		
-		System.out.println("Loaded static ARP cache");
+		System.out.println("Static ARP cache loaded successfully");
 		System.out.println("----------------------------------");
-		System.out.print(this.addressCache.toString());
+		System.out.print(this.addressTable.toString());
 		System.out.println("----------------------------------");
 	}
 
-	public void handlePacket(Ethernet etherFrame, Iface incomingInterface)
+	public void handlePacket(Ethernet etherPacket, Iface incomingIface)
 	{
-		System.out.println("*** -> Received packet: " +
-				etherFrame.toString().replace("\n", "\n\t"));
+		System.out.println("→ Received: " + etherPacket.toString().replace("\n", "\n\t"));
 		
-		if (etherFrame.getEtherType() != Ethernet.TYPE_IPv4) {
-			System.out.println("Non-IPv4 packet detected. Dropping.");
+		// Only handle IPv4 packets
+		if (etherPacket.getEtherType() != Ethernet.TYPE_IPv4) {
+			System.out.println("Dropped: Not an IPv4 packet");
 			return;
 		}
 
-		IPv4 ipPacket = (IPv4)etherFrame.getPayload();
+		// Process IPv4 packet
+		IPv4 ipPacket = (IPv4)etherPacket.getPayload();
 
+		// Validate checksum
 		if (!validateChecksum(ipPacket)) {
-			System.out.println("Checksum validation failed. Dropping packet.");
+			System.out.println("Dropped: Invalid checksum");
 			return;
 		}
 
+		// Update TTL
 		ipPacket.setTtl((byte)(ipPacket.getTtl() - 1));
-
 		if (ipPacket.getTtl() == 0) {
-			System.out.println("TTL expired. Dropping packet.");
+			System.out.println("Dropped: TTL expired");
 			return;
 		}
 
+		// Process RIP packet if enabled
 		if (ripEnabled) {
-			this.currentEtherFrame = etherFrame;
-			this.currentIpPacket = ipPacket;
+			cachedEthernetFrame = etherPacket;
+			cachedIpPacket = ipPacket;
+			cachedInterface = incomingIface;
 
 			if (processRipPacket()) {
-				System.out.println("RIP packet processed. No further handling needed.");
-				this.currentEtherFrame = null;
-				this.currentIpPacket = null;
+				System.out.println("RIP packet processed");
+				clearCachedPackets();
 				return;
 			}
-			
-			this.currentEtherFrame = null;
-			this.currentIpPacket = null;
+			clearCachedPackets();
 		}
 
+		// Recalculate checksum
 		ipPacket.resetChecksum();
 		ipPacket.serialize();
 
-		for (Iface networkInterface : this.interfaces.values()) {
-			if (ipPacket.getDestinationAddress() == networkInterface.getIpAddress()) {
-				System.out.println("Packet destined for router interface. Dropping.");
+		// Don't forward packets destined for router interfaces
+		for (Iface routerIface : this.interfaces.values()) {
+			if (ipPacket.getDestinationAddress() == routerIface.getIpAddress()) {
+				System.out.println("Dropped: Packet addressed to router");
 				return;
 			}
 		}
 
-		Iface outgoingInterface;
-
+		// Find outgoing interface
+		Iface outgoingIface;
 		if (ripEnabled) {
-			outgoingInterface = findRipRoute(ipPacket.getDestinationAddress());
-			if (outgoingInterface == null) {
-				System.out.println("No route found in RIP table. Dropping packet.");
-				return;
-			}
-		}
-		else {
-			RouteEntry routeMatch = this.forwardingTable.lookup(ipPacket.getDestinationAddress());
-			if (routeMatch == null) {
-				System.out.println("No matching route found. Dropping packet.");
-				return;
-			}
-			outgoingInterface = routeMatch.getInterface();
-		}
-
-		ArpEntry arpEntry = this.addressCache.lookup(ipPacket.getDestinationAddress());
-		if (arpEntry == null) {
-			System.out.println("ARP resolution failed. Dropping packet.");
-			return;
+			outgoingIface = findRouteInRipTable(ipPacket.getDestinationAddress());
 		} else {
-			System.out.println("Route and ARP resolution successful. Forwarding packet.");
+			RouteEntry route = this.forwardingTable.lookup(ipPacket.getDestinationAddress());
+			outgoingIface = (route != null) ? route.getInterface() : null;
 		}
 
-		etherFrame.setDestinationMACAddress(arpEntry.getMac().toBytes());
-		etherFrame.setSourceMACAddress(outgoingInterface.getMacAddress().toBytes());
-		etherFrame.setPayload(ipPacket);
+		if (outgoingIface == null) {
+			System.out.println("Dropped: No route to destination");
+			return;
+		}
 
-		System.out.println("Sending packet to next hop.");
-		if (sendPacket(etherFrame, outgoingInterface)) {
-			System.out.println("Packet forwarded successfully.");
+		// Find next hop MAC address
+		ArpEntry nextHop = this.addressTable.lookup(ipPacket.getDestinationAddress());
+		if (nextHop == null) {
+			System.out.println("Dropped: Destination MAC not found in ARP cache");
+			return;
 		}
-		else {
-			System.out.println("Packet forwarding failed.");
-		}
+
+		// Update Ethernet header
+		etherPacket.setDestinationMACAddress(nextHop.getMac().toBytes());
+		etherPacket.setSourceMACAddress(outgoingIface.getMacAddress().toBytes());
+		etherPacket.setPayload(ipPacket);
+
+		// Forward packet
+		System.out.println("Forwarding packet to next hop");
+		boolean success = sendPacket(etherPacket, outgoingIface);
+		System.out.println(success ? "Packet forwarded successfully" : "Failed to forward packet");
 	}
 
-	public boolean validateChecksum(IPv4 ipPacket)
+	private boolean validateChecksum(IPv4 ipPacket)
 	{
-		short originalChecksum = (short)(ipPacket.getChecksum());
+		short originalChecksum = ipPacket.getChecksum();
 		ipPacket.resetChecksum();
 		ipPacket.serialize();
-
 		return ipPacket.getChecksum() == originalChecksum;
 	}
 
-	public Iface findRipRoute(int destAddress)
+	private void clearCachedPackets() {
+		this.cachedEthernetFrame = null;
+		this.cachedIpPacket = null;
+		this.cachedInterface = null;
+	}
+
+	public Iface findRouteInRipTable(int destinationIp)
 	{
-		if (this.ripDatabase.getEntries().isEmpty()) { 
-			return null; 
+		if (this.ripDatabase.getEntries().isEmpty() || destinationIp == 0) {
+			return null;
+		}
+			
+		int longestMatch = 0;
+		RIPv2Entry bestEntry = null;
+		
+		for (RIPv2Entry entry : this.ripDatabase.getEntries()) {
+			int tableNetworkAddr = entry.getAddress() & entry.getSubnetMask();
+			int destNetworkAddr = destinationIp & entry.getSubnetMask();
+			
+			int[] tableBytes = extractIpBytes(tableNetworkAddr);
+			int[] destBytes = extractIpBytes(destNetworkAddr);
+			
+			int matchDepth = compareNetworkBytes(tableBytes, destBytes);
+			if (matchDepth > longestMatch) {
+				longestMatch = matchDepth;
+				bestEntry = entry;
+			}
 		}
 
-		if (destAddress == 0) { 
-			return null; 
+		if (bestEntry == null || bestEntry.getMetric() == 16) {
+			return null;
 		}
 		
-		int longestMatch = 0;
-		RIPv2Entry matchingEntry = null;
-		int tableNetworkAddr = 0;
-		int destNetworkAddr = 0;
-		int[] destAddrBytes = new int[4];
-		int[] tableAddrBytes = new int[4];	
-
-		for (RIPv2Entry entry : this.ripDatabase.getEntries())
-		{
-			tableNetworkAddr = entry.getAddress() & entry.getSubnetMask();
-			destNetworkAddr = destAddress & entry.getSubnetMask();
-
-			tableAddrBytes[0] = (int)((tableNetworkAddr >> 24) & 0xFF);
-			tableAddrBytes[1] = (int)((tableNetworkAddr >> 16) & 0xFF);
-			tableAddrBytes[2] = (int)((tableNetworkAddr >> 8) & 0xFF);
-			tableAddrBytes[3] = (int)(tableNetworkAddr & 0xFF);
-
-			destAddrBytes[0] = (int)((destNetworkAddr >> 24) & 0xFF);
-			destAddrBytes[1] = (int)((destNetworkAddr >> 16) & 0xFF);
-			destAddrBytes[2] = (int)((destNetworkAddr >> 8) & 0xFF);
-			destAddrBytes[3] = (int)(destNetworkAddr & 0xFF);
-
-			System.out.println("Comparing network addresses for route lookup:");
-			System.out.println("Destination network: " + destAddrBytes);
-			
-			for (int i = 0; i < 4; i++)
-			{
-				System.out.println(String.format("Comparing bytes: table[%d]=%d, dest[%d]=%d", 
-					i, tableAddrBytes[i], i, destAddrBytes[i]));
-				
-				if (tableAddrBytes[i] == destAddrBytes[i])
-				{
-					if (i >= longestMatch)
-					{
-						longestMatch = i+1;
-						matchingEntry = entry;
-					}
+		if (bestEntry.getNextHopAddress() == 0) {
+			// Direct connection
+			for (Iface iface : this.interfaces.values()) {
+				if ((iface.getIpAddress() & iface.getSubnetMask()) == bestEntry.getAddress()) {
+					return iface;
 				}
-				else
-				{
-					break;
+			}
+		} else {
+			// Route via next hop
+			for (Iface iface : this.interfaces.values()) {
+				if (iface.getIpAddress() == bestEntry.getNextHopAddress()) {
+					return iface;
 				}
 			}
 		}
-
-		System.out.println("Found matching entry in RIP table:");
-		System.out.println(matchingEntry.toString());
-
-		if (matchingEntry == null) {
-			return null;
-		}
-		else if (matchingEntry.getMetric() == 16) {
-			return null;
-		}
-		else if (matchingEntry.getNextHopAddress() == 0) {
-			for (Iface networkInterface : this.interfaces.values()) {
-				if ((networkInterface.getIpAddress() & networkInterface.getSubnetMask()) == matchingEntry.getAddress()) {
-					return networkInterface;
-				}
-			}
-			return null;
-		}
-		else {
-			for (Iface networkInterface : this.interfaces.values()) {
-				if ((networkInterface.getIpAddress() & networkInterface.getSubnetMask()) == matchingEntry.getNextHopAddress()) {
-					return networkInterface;
-				}
-			}
-		}
+		
 		return null;
+	}
+	
+	private int[] extractIpBytes(int ipAddress) {
+		int[] bytes = new int[4];
+		bytes[0] = (ipAddress >> 24) & 0xFF;
+		bytes[1] = (ipAddress >> 16) & 0xFF;
+		bytes[2] = (ipAddress >> 8) & 0xFF;
+		bytes[3] = ipAddress & 0xFF;
+		return bytes;
+	}
+	
+	private int compareNetworkBytes(int[] addr1, int[] addr2) {
+		for (int i = 0; i < 4; i++) {
+			if (addr1[i] != addr2[i]) {
+				return i;
+			}
+		}
+		return 4;
 	}
 
 	public boolean processRipPacket()
 	{
-		System.out.println("Checking if packet contains RIP data.");
+		System.out.println("Checking if packet is RIP message");
 
-		if (!(currentIpPacket.getPayload() instanceof UDP)) {
-			System.out.println("Not a UDP packet. Skipping RIP processing.");
+		if (!(cachedIpPacket.getPayload() instanceof UDP)) {
 			return false;
 		}
 
-    	UDP udpSegment = (UDP) currentIpPacket.getPayload();
-
-		if (udpSegment.getDestinationPort() != UDP.RIP_PORT) {
-			System.out.println("UDP packet not destined for RIP port 520. Ignoring.");
+		UDP udpPacket = (UDP) cachedIpPacket.getPayload();
+		if (udpPacket.getDestinationPort() != UDP.RIP_PORT) {
 			return false;
 		}
 		
-		System.out.println("UDP packet on port 520 detected.");
-
-		if (!(udpSegment.getPayload() instanceof RIPv2)) {
-			System.out.println("UDP packet does not contain RIP data. Ignoring.");
+		if (!(udpPacket.getPayload() instanceof RIPv2)) {
 			return false;
 		}
 
-    	RIPv2 ripMessage = (RIPv2) udpSegment.getPayload();
-
-		if (ripMessage.getCommand() == RIPv2.COMMAND_REQUEST) {
-			System.out.println("Processing RIP REQUEST...");
-			processRipData(true);
-		}
-		else if (ripMessage.getCommand() == RIPv2.COMMAND_RESPONSE) {
-			System.out.println("Processing RIP RESPONSE...");
-			processRipData(false);
-		}
-		else {
-			System.out.println("Invalid RIP command. Ignoring packet.");
-			return true;
+		RIPv2 ripPacket = (RIPv2) udpPacket.getPayload();
+		
+		if (ripPacket.getCommand() == RIPv2.COMMAND_REQUEST) {
+			System.out.println("Processing RIP request");
+			processRipUpdate(true);
+		} else if (ripPacket.getCommand() == RIPv2.COMMAND_RESPONSE) {
+			System.out.println("Processing RIP response");
+			processRipUpdate(false);
+		} else {
+			System.out.println("Invalid RIP command");
 		}
 		
-		System.out.println("RIP message processing completed.");
 		return true;
 	}
 
-	public void processRipData(boolean responseRequired)
+	private void processRipUpdate(boolean needsResponse)
 	{
-		System.out.println("Processing RIP message content.");
-
-		UDP udpSegment = (UDP) currentIpPacket.getPayload();  
-		RIPv2 receivedRipData = (RIPv2) udpSegment.getPayload();
-
-		boolean tableUpdated = false;
+		UDP udpData = (UDP) cachedIpPacket.getPayload();  
+		RIPv2 receivedRipData = (RIPv2) udpData.getPayload();
+		boolean tableModified = false;
 
 		for (RIPv2Entry entry : receivedRipData.getEntries()) {
-			if (updateRipTable(entry)) {
-				tableUpdated = true;
+			if (updateRipRoutingTable(entry)) {
+				tableModified = true;
 			}
     	}
 
-		if (tableUpdated) {
+		if (tableModified) {
 			broadcastRipMessage(RIPv2.COMMAND_RESPONSE); 
-		} else if (responseRequired) {
-			System.out.println("No table updates, but response required. Sending response.");
-			sendDirectRipResponse(); 
+		} else if (needsResponse) {
+			sendTargetedRipResponse(); 
 		}
-
-		System.out.println("RIP data processing completed.");
 	}
 
-	public void checkRipTimers()
+	public void checkLastRIPTime()
 	{	
-    	boolean tableUpdated = checkForExpiredEntries();
+		boolean tableUpdated = pruneExpiredEntries();
 
-		if ((System.currentTimeMillis() - lastRipUpdateTimestamp) > 10000) {
-			broadcastRipMessage(RIPv2.COMMAND_REQUEST);
-			lastRipUpdateTimestamp = System.currentTimeMillis();
+		if ((System.currentTimeMillis() - ripLastUpdateTimestamp) > 10000) {
+			broadcastRipMessage(RIPv2.COMMAND_RESPONSE);
+			ripLastUpdateTimestamp = System.currentTimeMillis();
 			return;
 		}
 
@@ -347,14 +319,19 @@ public class Router extends Device
 		}
 	}
 
-	public boolean checkForExpiredEntries()
+	private boolean pruneExpiredEntries()
 	{
 		boolean foundExpired = false;
 
-		for (RIPv2Entry entry : this.ripDatabase.getEntries()) 
-		{
-			if (entry.isExpired(System.currentTimeMillis())) 
-			{
+		for (RIPv2Entry entry : this.ripDatabase.getEntries()) {
+			if (entry.getNextHopAddress() == 0) {
+				// Local entry, refresh timestamp
+				entry.setTime(System.currentTimeMillis());
+			} else if (entry.getMetric() == 16) {
+				// Already marked unreachable
+				entry.setTime(System.currentTimeMillis());
+			} else if (entry.isExpired(System.currentTimeMillis())) {
+				// Mark as expired
 				foundExpired = true;
 			}
 		}
@@ -362,128 +339,144 @@ public class Router extends Device
 		return foundExpired;
 	}
 
-	private boolean updateRipTable(RIPv2Entry entry) {
-		System.out.println("Evaluating RIP entry for table update.");
-		entry.toString();
+	private boolean updateRipRoutingTable(RIPv2Entry newEntry) {
+		int targetNetwork = newEntry.getAddress();
+		int subnetMask = newEntry.getSubnetMask();
+		int newMetric = newEntry.getMetric() + 1;
 
-		int targetNetwork = entry.getAddress();
-		int netmask = entry.getSubnetMask();
-		int hopCount = entry.getMetric() + 1;
-
-		int localNetwork = 0;
-		for (Iface networkInterface : this.interfaces.values()) {
-			localNetwork = networkInterface.getIpAddress() & networkInterface.getSubnetMask();
+		// Check if this is a directly connected network
+		for (Iface iface : this.interfaces.values()) {
+			int localNetwork = iface.getIpAddress() & iface.getSubnetMask();
 			if (localNetwork == targetNetwork) {
 				return false;
 			}					
 		}
 
+		// Check for existing entries
 		for (int i = 0; i < this.ripDatabase.getEntries().size(); i++) {
-			if (this.ripDatabase.getEntries().get(i).getAddress() == targetNetwork) {
-				if (this.ripDatabase.getEntries().get(i).getNextHopAddress() == currentIpPacket.getSourceAddress()) {
-					this.ripDatabase.getEntries().get(i).setMetric(hopCount);
-					this.ripDatabase.getEntries().get(i).setTime(System.currentTimeMillis());
-					return true;
-				} 
-				else {
-					if (this.ripDatabase.getEntries().get(i).getMetric() <= hopCount) {
+			RIPv2Entry existingEntry = this.ripDatabase.getEntries().get(i);
+			
+			if (existingEntry.getAddress() == targetNetwork) {
+				// Same next hop
+				if (existingEntry.getNextHopAddress() == this.cachedInterface.getIpAddress()) {
+					if (existingEntry.getMetric() == newMetric) {
+						// Refresh timestamp only
+						existingEntry.setTime(System.currentTimeMillis());
 						return false;
 					} else {
-						this.ripDatabase.getEntries().get(i).setMetric(hopCount);
-						this.ripDatabase.getEntries().get(i).setTime(System.currentTimeMillis());
-						this.ripDatabase.getEntries().get(i).setNextHopAddress(currentIpPacket.getSourceAddress());
+						// Update metric
+						existingEntry.setMetric(newMetric);
+						existingEntry.setTime(System.currentTimeMillis());
+						return true;
+					}
+				} else {
+					// Different next hop - compare metrics
+					if (existingEntry.getMetric() <= newMetric) {
+						return false;
+					} else {
+						// Update to better path
+						existingEntry.setMetric(newMetric);
+						existingEntry.setTime(System.currentTimeMillis());
+						existingEntry.setNextHopAddress(this.cachedInterface.getIpAddress());
 						return true;
 					}
 				}
 			} 
 		}
 
-		System.out.println("New network discovered.");
-
-		if (entry.getMetric() < 16) {
-			RIPv2Entry newEntry = new RIPv2Entry(targetNetwork, netmask, hopCount, System.currentTimeMillis());
-			newEntry.setTime(System.currentTimeMillis());
-			this.ripDatabase.addEntry(newEntry);
+		// New entry
+		if (newEntry.getMetric() < 16) {
+			RIPv2Entry addedEntry = new RIPv2Entry(
+				targetNetwork, 
+				subnetMask, 
+				newMetric, 
+				System.currentTimeMillis()
+			);
+			
+			addedEntry.setNextHopAddress(this.cachedInterface.getIpAddress());
+			this.ripDatabase.addEntry(addedEntry);
 			return true;
 		}
 
-		System.out.println("Entry not added to table.");
 		return false;
 	}
 
-	public void broadcastRipMessage(byte commandType)
+	private void broadcastRipMessage(byte commandType)
 	{
 		if (!ripEnabled) {
-			System.out.println("RIP not enabled. Cannot send RIP messages.");
 			return;
 		}
 
-		if (commandType != 1 && commandType != 2) {
-			System.out.println("Invalid RIP command type. Aborting.");
+		if (commandType != RIPv2.COMMAND_REQUEST && commandType != RIPv2.COMMAND_RESPONSE) {
 			return;
 		}
-
-		System.out.println("Preparing RIP broadcast message.");
 
 		this.ripDatabase.setCommand(commandType);
-		checkForExpiredEntries();
+		pruneExpiredEntries();
 
-		int multicastAddr = IPv4.toIPv4Address("224.0.0.9");
+		// RIP multicast address and broadcast MAC
+		int multicastIp = IPv4.toIPv4Address("224.0.0.9");
 		MACAddress broadcastMac = MACAddress.valueOf("FF:FF:FF:FF:FF:FF");
 		
-		for (Iface networkInterface : this.interfaces.values()) {
-			sendRipPacket(networkInterface, multicastAddr, broadcastMac);
+		for (Iface iface : this.interfaces.values()) {
+			sendRipPacket(iface, multicastIp, broadcastMac);
 		}
-
+		
+		// Reset command
 		this.ripDatabase.setCommand((byte) 0);
 	}
 
-	public void sendDirectRipResponse()
-	{
-		if (this.ripDatabase.getCommand() == 2) {
-			Iface targetInterface = this.forwardingTable.lookup(currentIpPacket.getDestinationAddress()).getInterface();
-			sendRipPacket(targetInterface, currentIpPacket.getSourceAddress(), currentEtherFrame.getSourceMAC()); 
-		} 
-		else {
-			System.out.println("Invalid command for direct response.");
-		}
-	}
-
-	public void sendRipPacket(Iface outInterface, int destinationIp, MACAddress destinationMac)
-	{
-		if (outInterface == null) {
-			System.out.println("Invalid interface for RIP message.");
+	private void sendTargetedRipResponse() {
+		if (!ripEnabled || this.ripDatabase.getCommand() != RIPv2.COMMAND_RESPONSE) {
 			return;
 		}
 
-		IPv4 ipv4Packet = new IPv4();
-		ipv4Packet.setSourceAddress(outInterface.getIpAddress());
-		ipv4Packet.setDestinationAddress(outInterface.getSubnetMask());
-		ipv4Packet.setProtocol(IPv4.PROTOCOL_UDP);
-		ipv4Packet.setTtl((byte) 255);
-		ipv4Packet.setPayload(createRipUdpPacket());
-
-		Ethernet etherFrame = new Ethernet();
-		etherFrame.setDestinationMACAddress(destinationMac.toBytes());
-		etherFrame.setSourceMACAddress(outInterface.getMacAddress().toBytes());
-		etherFrame.setPayload(ipv4Packet);
-
-		System.out.println("Sending RIP message...");
-		if (sendPacket(etherFrame, outInterface)) {
-			System.out.println("RIP message sent successfully.");
+		Iface targetIface = findRouteInRipTable(this.cachedInterface.getIpAddress());
+		if (targetIface == null) {
+			return;
 		}
-		else {
-			System.out.println("Failed to send RIP message.");
-		}
+		
+		sendRipPacket(
+			targetIface, 
+			cachedIpPacket.getSourceAddress(), 
+			cachedEthernetFrame.getSourceMAC()
+		);
 	}
 
-	public UDP createRipUdpPacket()
+	private void sendRipPacket(Iface outIface, int destIp, MACAddress destMac)
 	{
-		UDP udpSegment = new UDP();
-		udpSegment.setSourcePort(UDP.RIP_PORT);
-		udpSegment.setDestinationPort(UDP.RIP_PORT);
-		udpSegment.setChecksum((short) 0);
-		udpSegment.setPayload(this.ripDatabase);
-		return udpSegment;
+		if (outIface == null) {
+			return;
+		}
+
+		// Create IP packet
+		IPv4 ipPacket = new IPv4();
+		ipPacket.setSourceAddress(outIface.getIpAddress());
+		ipPacket.setDestinationAddress(destIp);
+		ipPacket.setProtocol(IPv4.PROTOCOL_UDP);
+		ipPacket.setTtl((byte) 255);
+		ipPacket.setPayload(createRipUdpPacket());
+
+		// Create Ethernet frame
+		Ethernet ethFrame = new Ethernet();
+		ethFrame.setEtherType(Ethernet.TYPE_IPv4);
+		ethFrame.setDestinationMACAddress(destMac.toBytes());
+		ethFrame.setSourceMACAddress(outIface.getMacAddress().toBytes());
+		ethFrame.setPayload(ipPacket);
+
+		// Send packet
+		System.out.println("Sending RIP update");
+		boolean success = sendPacket(ethFrame, outIface);
+		System.out.println(success ? "RIP update sent" : "Failed to send RIP update");
+	}
+
+	private UDP createRipUdpPacket()
+	{
+		UDP udpPacket = new UDP();
+		udpPacket.setSourcePort(UDP.RIP_PORT);
+		udpPacket.setDestinationPort(UDP.RIP_PORT);
+		udpPacket.setChecksum((short) 0);
+		udpPacket.setPayload(this.ripDatabase);
+		return udpPacket;
 	}
 }

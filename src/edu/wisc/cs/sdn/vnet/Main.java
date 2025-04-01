@@ -6,136 +6,144 @@ import edu.wisc.cs.sdn.vnet.vns.VNSComm;
 
 public class Main 
 {
-	private static final short NETWORK_PORT = 8888;
-	private static final String DEFAULT_SIMULATOR = "localhost";
+	private static final short COMM_PORT = 8888;
+	private static final String COMM_ADDRESS = "localhost";
 	
 	public static void main(String[] args)
 	{
-		String deviceName = null;
-		String simulatorAddress = DEFAULT_SIMULATOR;
-		String routingTablePath = null;
-		String arpCachePath = null;
-		String logFilePath = null;
-		short networkPort = NETWORK_PORT;
+		String nodeId = null;
+		String serverAddress = COMM_ADDRESS;
+		String routingConfig = null;
+		String arpConfig = null;
+		String packetLog = null;
+		short serverPort = COMM_PORT;
 		VNSComm networkComm = null;
-		Device networkDevice = null;
+		Device networkNode = null;
 		
-		// Process command line arguments
+		// Process command line args
 		for(int i = 0; i < args.length; i++)
 		{
 			String currentArg = args[i];
 			if (currentArg.equals("-h"))
 			{
-				displayHelp();
+				showHelp();
 				return;
 			}
 			else if(currentArg.equals("-p"))
-			{ networkPort = Short.parseShort(args[++i]); }
+			{ serverPort = Short.parseShort(args[++i]); }
 			else if (currentArg.equals("-v"))
-			{ deviceName = args[++i]; }
+			{ nodeId = args[++i]; }
 			else if (currentArg.equals("-s"))
-			{ simulatorAddress = args[++i]; }
+			{ serverAddress = args[++i]; }
 			else if (currentArg.equals("-l"))
-			{ logFilePath = args[++i]; }
+			{ packetLog = args[++i]; }
 			else if (currentArg.equals("-r"))
-			{ routingTablePath = args[++i]; }
+			{ routingConfig = args[++i]; }
 			else if (currentArg.equals("-a"))
-			{ arpCachePath = args[++i]; }
+			{ arpConfig = args[++i]; }
 		}
 		
-		if (deviceName == null)
+		if (nodeId == null)
 		{
-			displayHelp();
+			showHelp();
 			return;
 		}
 		
-		// Initialize packet capture for logging
-		DumpFile packetCapture = null;
-		if (logFilePath != null)
+		// Configure packet logging if requested
+		DumpFile packetDump = null;
+		if (packetLog != null)
 		{
-			packetCapture = DumpFile.open(logFilePath);
-			if (packetCapture == null)
+			packetDump = DumpFile.open(packetLog);
+			if (packetDump == null)
 			{
-				System.err.println("Failed to open log file: " + logFilePath);
+				System.err.println("Failed to open log file: " + packetLog);
 				return;
 			}
 		}
 		
-		// Create appropriate network device based on name prefix
-		if (deviceName.startsWith("s"))
-		{ 
-			networkDevice = new Switch(deviceName, packetCapture); 
-		}
-		else if (deviceName.startsWith("r"))
-		{
-			networkDevice = new Router(deviceName, packetCapture);
-		}
+		// Initialize appropriate network device
+		if (nodeId.startsWith("s"))
+		{ networkNode = new Switch(nodeId, packetDump); }
+		else if (nodeId.startsWith("r"))
+		{ networkNode = new Router(nodeId, packetDump); }
 		else 
 		{
-			System.err.println("Device name must begin with 's' or 'r'");
+			System.err.println("Invalid device ID format - must begin with 's' or 'r'");
 			return;
 		}
 		
 		// Establish connection to network simulator
-		System.out.println(String.format("Connecting to simulator at %s:%d", 
-				simulatorAddress, networkPort));
-		networkComm = new VNSComm(networkDevice);
-		if (!networkComm.connectToServer(networkPort, simulatorAddress))
+		System.out.println("Initializing connection to " + serverAddress + ":" + serverPort);
+		networkComm = new VNSComm(networkNode);
+		if (!networkComm.connectToServer(serverPort, serverAddress))
 		{ System.exit(1); }
 		networkComm.readFromServerExpect(Command.VNS_HW_INFO);	
 		
-		// Configure router-specific settings if applicable
-		if (networkDevice instanceof Router) 
+		// Configure router-specific options if applicable
+		if (networkNode instanceof Router) 
 		{
-			Router routerDevice = (Router)networkDevice;
+			Router routerNode = (Router)networkNode;
 			
-			// Load routing information - either from file or start RIP
-			if (routingTablePath != null)
-			{ 
-				routerDevice.loadRouteTable(routingTablePath); 
-			}
-			else { 
-				routerDevice.startRIPTable(); 
-			}
+			if (routingConfig != null)
+			{ routerNode.loadRouteTable(routingConfig); }
+			else 
+			{ routerNode.startRIPTable(); }
 			
-			// Load ARP cache if provided
-			if (arpCachePath != null)
-			{ 
-				routerDevice.loadArpCache(arpCachePath); 
-			}
+			if (arpConfig != null)
+			{ routerNode.loadArpCache(arpConfig); }
 		}
 		
-		// Begin processing network packets
-		System.out.println("<-- Ready to process packets -->");
+		System.out.println(">>> Network device initialized and ready <<<");
 		
-		// Main processing loop - with special handling for RIP-enabled routers
-		if (routingTablePath == null && networkDevice instanceof Router) {
-			// For RIP-enabled routers, check RIP timers between processing packets
-			Router ripRouter = (Router)networkDevice;
-			while (networkComm.readFromServer()) {
-				ripRouter.checkLastRIPTime();
-			}
+		// Main processing loop
+		if (routingConfig == null && networkNode instanceof Router) {
+			handleRIPUpdates((Router)networkNode, networkComm);
 		}
 		else {
-			// Standard packet processing for other devices
 			while (networkComm.readFromServer()) {
-				// Process packets without additional RIP checks
+				// Process packets until server disconnects
 			}
 		}
 		
 		// Clean up resources
-		networkDevice.destroy();
+		networkNode.destroy();
 	}
 	
-	/**
-	 * Displays command-line usage information
-	 */
-	static void displayHelp()
+	private static void handleRIPUpdates(Router router, VNSComm comm) {
+		boolean[] active = {true};
+		Router[] routerRef = {router};
+		
+		Thread updateThread = new Thread(() -> {
+			while (active[0]) {
+				try {
+					routerRef[0].checkLastRIPTime();
+					Thread.sleep(100);
+				} catch (InterruptedException e) {
+					System.err.println("RIP update thread terminated");
+					active[0] = false;
+				}
+			}
+		});
+		
+		updateThread.start();
+		
+		while (comm.readFromServer()) {
+			// Process packets while maintaining RIP updates
+		}
+		
+		active[0] = false;
+		try {
+			updateThread.join();
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	static void showHelp()
 	{
-		System.out.println("Virtual Network Client");
-		System.out.println("VNet -v host [-s server] [-p port] [-h]");
-		System.out.println("     [-r routing_table] [-a arp_cache] [-l log_file]");
-		System.out.println(String.format("  defaults server=%s port=%d", 
-				DEFAULT_SIMULATOR, NETWORK_PORT));
+		System.out.println("SDN Virtual Network Client");
+		System.out.println("Usage: VNet -v host [-s server] [-p port] [-h]");
+		System.out.println("       [-r routing_table] [-a arp_cache] [-l log_file]");
+		System.out.println("Default: server=" + COMM_ADDRESS + ", port=" + COMM_PORT);
 	}
 }
